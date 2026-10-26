@@ -1,0 +1,401 @@
+openapi: 3.0.3
+info:
+  title: Amrutam Telemedicine System API
+  version: 1.0.0
+  description: |
+    Production-grade, highly scalable backend for Amrutam's Telemedicine System.
+    Engineered for 100k daily consultations, p95 < 200ms read, < 500ms write latency,
+    concurrency locking, HIPAA-grade PHI encryption, and Prometheus observability.
+  contact:
+    name: Amrutam Engineering Team
+    email: engineering@amrutam.co.in
+servers:
+  - url: http://localhost:4000
+    description: Local Development Server
+  - url: https://api.telemedicine.amrutam.co.in
+    description: Production Cluster
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    IdempotencyKey:
+      type: apiKey
+      in: header
+      name: X-Idempotency-Key
+      description: Unique UUID key to prevent duplicate mutating operations
+
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+
+    UserRegistration:
+      type: object
+      required:
+        - email
+        - phone
+        - password
+        - profile
+      properties:
+        email:
+          type: string
+          format: email
+          example: patient@amrutam.co.in
+        phone:
+          type: string
+          example: "+919876543210"
+        password:
+          type: string
+          format: password
+          example: SecurePass123!
+        role:
+          type: string
+          enum: [PATIENT, DOCTOR, ADMIN]
+          default: PATIENT
+        profile:
+          type: object
+          required:
+            - firstName
+            - lastName
+          properties:
+            firstName:
+              type: string
+              example: Aarav
+            lastName:
+              type: string
+              example: Sharma
+            gender:
+              type: string
+              enum: [MALE, FEMALE, OTHER]
+            dateOfBirth:
+              type: string
+              format: date
+              example: "1994-06-15"
+        doctorDetails:
+          type: object
+          properties:
+            licenseNumber:
+              type: string
+              example: "AYUSH-IND-2024-8842"
+            specialties:
+              type: array
+              items:
+                type: string
+              example: ["Nadi Pariksha", "Kayachikitsa", "Panchakarma"]
+            yearsOfExperience:
+              type: integer
+              example: 12
+            consultationFee:
+              type: number
+              example: 800
+
+    BookingRequest:
+      type: object
+      required:
+        - slotId
+        - doctorId
+      properties:
+        slotId:
+          type: string
+          format: uuid
+        doctorId:
+          type: string
+          format: uuid
+        patientNotes:
+          type: string
+          example: "Experiencing chronic fatigue and digestive irregularity"
+
+    PrescriptionRequest:
+      type: object
+      required:
+        - diagnosis
+        - medicinesDosage
+      properties:
+        diagnosis:
+          type: string
+          example: "Vata-Kapha Prakriti imbalance with Agnimandya"
+        medicinesDosage:
+          type: array
+          items:
+            type: object
+            required: [name, dosage, timing, duration]
+            properties:
+              name:
+                type: string
+                example: "Amrutam Bresol Syrup"
+              dosage:
+                type: string
+                example: "10ml with lukewarm water"
+              timing:
+                type: string
+                example: "Twice daily after meals"
+              duration:
+                type: string
+                example: "30 days"
+        dietaryLifestyleAdvice:
+          type: string
+          example: "Avoid cold refrigerated drinks; favor cooked ginger teas"
+        privateClinicalNotes:
+          type: string
+          description: "Encrypted at rest using AES-256-GCM"
+          example: "Patient exhibited high stress levels and elevated pulse."
+
+paths:
+  /health/liveness:
+    get:
+      summary: Liveness probe
+      responses:
+        200:
+          description: Service is healthy
+
+  /health/readiness:
+    get:
+      summary: Readiness probe (PostgreSQL & Redis health check)
+      responses:
+        200:
+          description: System ready to receive traffic
+        503:
+          description: System dependency unavailable
+
+  /metrics:
+    get:
+      summary: Prometheus metrics endpoint
+      responses:
+        200:
+          description: Prometheus exposition format metrics
+
+  /api/v1/auth/register:
+    post:
+      summary: Register new patient or doctor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegistration'
+      responses:
+        201:
+          description: User registered successfully
+        400:
+          description: Validation error
+        409:
+          description: User already exists
+
+  /api/v1/auth/login:
+    post:
+      summary: Login user (returns JWT or MFA prompt)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+                mfaToken:
+                  type: string
+      responses:
+        200:
+          description: Authentication successful
+        401:
+          description: Invalid credentials or MFA code
+
+  /api/v1/auth/mfa/setup:
+    post:
+      summary: Initiate TOTP MFA setup
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: TOTP secret and QR code returned
+
+  /api/v1/doctors:
+    get:
+      summary: Search doctors with caching & filters
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: specialty
+          in: query
+          schema:
+            type: string
+        - name: minExperience
+          in: query
+          schema:
+            type: integer
+        - name: maxFee
+          in: query
+          schema:
+            type: number
+        - name: minRating
+          in: query
+          schema:
+            type: number
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        200:
+          description: Doctors list retrieved
+
+  /api/v1/doctors/{doctorId}/slots:
+    get:
+      summary: Retrieve doctor availability slots
+      parameters:
+        - name: doctorId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: List of slots
+    post:
+      summary: Create availability slots (Doctor / Admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: doctorId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slots:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      startTime:
+                        type: string
+                        format: date-time
+                      endTime:
+                        type: string
+                        format: date-time
+      responses:
+        201:
+          description: Slots created
+
+  /api/v1/bookings:
+    post:
+      summary: Reserve slot and initiate consultation (Zero double-booking)
+      security:
+        - BearerAuth: []
+        - IdempotencyKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookingRequest'
+      responses:
+        201:
+          description: Booking reserved and payment order created
+        409:
+          description: Slot conflict (already reserved or being processed)
+
+  /api/v1/payments/webhook:
+    post:
+      summary: Payment gateway webhook confirmation
+      security:
+        - IdempotencyKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, paymentId]
+              properties:
+                orderId:
+                  type: string
+                paymentId:
+                  type: string
+                signature:
+                  type: string
+      responses:
+        200:
+          description: Payment confirmed and consultation scheduled
+
+  /api/v1/consultations/{consultationId}/prescriptions:
+    post:
+      summary: Issue Ayurvedic prescription (Doctor only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: consultationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrescriptionRequest'
+      responses:
+        201:
+          description: Prescription issued and signed
+    get:
+      summary: Retrieve prescription for consultation
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: consultationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Prescription details
+
+  /api/v1/admin/analytics/overview:
+    get:
+      summary: Admin platform KPIs and consultation metrics
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: System analytics overview
+
+  /api/v1/admin/audit-logs:
+    get:
+      summary: Immutable audit trail with cryptographic hash chain
+      security:
+        - BearerAuth: []
+      responses:
+        200:
+          description: Audit logs list
