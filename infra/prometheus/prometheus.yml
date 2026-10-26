@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'amrutam_telemedicine_api'
+    scrape_interval: 5s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['api:4000']
+        labels:
+          service: 'amrutam-telemedicine-backend'
+          environment: 'production'

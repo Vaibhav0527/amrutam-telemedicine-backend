@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: amrutam_api
+    restart: always
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - HOST=0.0.0.0
+      - DATABASE_URL=postgresql://postgres:amrutam_secret_pw@postgres:5432/amrutam_telemedicine?schema=public
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=amrutam_telemedicine_super_jwt_secret_key_32chars
+      - JWT_REFRESH_SECRET=amrutam_telemedicine_super_refresh_secret_key_32chars
+      - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - LOG_LEVEL=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - amrutam_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: amrutam_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: amrutam_secret_pw
+      POSTGRES_DB: amrutam_telemedicine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d amrutam_telemedicine"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - amrutam_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: amrutam_redis
+    restart: always
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - amrutam_net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: amrutam_prometheus
+    restart: always
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - amrutam_net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: amrutam_grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=amrutam_admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - amrutam_net
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  amrutam_net:
+    driver: bridge
